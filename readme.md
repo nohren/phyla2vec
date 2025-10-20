@@ -59,7 +59,8 @@ export CTX="Deblur_2021.09-Illumina-16S-V3V4-150nt-ac8c0b"
 3. Get the biom samples... expect this step to take 20 to 30 min.
 
 ```bash
-redbiom search metadata 'where qiita_study_id==10317' | redbiom fetch samples --context $CTX --output v3.biom
+redbiom search metadata 'where qiita_study_id==10317' | \
+redbiom fetch samples --context $CTX --output v3.biom
 ```
 
 Inspecting data use biom from the package
