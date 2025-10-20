@@ -42,9 +42,7 @@ https://drive.google.com/drive/folders/1ZoZcNtGAhEce-K6ldiekuRoMCkAK3RBy?usp=sha
 
 ### Data fetching magic for redbiom:
 
-1. look for suitable samples by context they were created with. Check sample count and use that primer. For instance Deblur_2021.09-Illumina-16S-V4-150nt-ac8c0b has 253301 and Deblur_2021.09-Illumina-16S-V3-150nt-ac8c0b has 1385 samples across all studies. The the intersection of qiita study 10317 (AGP) with these ctx will yield less samples.
-
-Deblur_2021.09-Illumina-16S-V3-150nt-ac8c0b does not have AGP data.
+1. look for suitable samples by the context they were created i.e Deblur._16S._.\*150nt. Check sample count and primer. If all looks good use that context.
 
 ```bash
 # Show Deblur 16S contexts trimmed to 150nt; this is for V4, can change for other primers
@@ -60,9 +58,8 @@ export CTX="Deblur_2021.09-Illumina-16S-V3V4-150nt-ac8c0b"
 
 3. Get the biom samples... expect this step to take 20 to 30 min.
 
-```
+```bash
 redbiom search metadata 'where qiita_study_id==10317' | redbiom fetch samples --context $CTX --output v3.biom
-
 ```
 
 Inspecting data use biom from the package
