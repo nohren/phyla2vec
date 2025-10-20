@@ -1,0 +1,24 @@
+name: phyla2vec
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.11
+  - biom-format
+  - pandas
+  - nltk
+  - numpy
+  - matplotlib
+  - scipy
+  - statsmodels
+  - scikit-bio
+  - jupyterlab
+  - ipykernel
+  - tqdm
+  - pyarrow # fast I/O for big TSV/CSV
+  - biopython # handy for seq/taxonomy utils
+  - pip # <- needed so the pip section works
+  - pip:
+      # PyPI release (if available)
+      - redbiom @ git+https://github.com/biocore/redbiom.git
