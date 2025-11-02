@@ -171,11 +171,15 @@ Starting from the first epoch and continuing every $f=5$ epochs:
 - Select n = 5000 random reads without replacement from each sample.
 
 ```python
-  reads = [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10]
+  sample_1_reads = [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10]
 
-  # rarefy without replacement to 5 reads. Only can have unique reads in a sample.
-  pick {r3, r7, r1, r9, r5}
-```
+  # rarefy without replacement to 5 reads. No duplicate reads allowed.
+
+  # allowed
+  sample1_rarefy = {r3, r7, r1, r9, r5}
+
+  # not allowed
+  sample1_rarefy = {r3, r3, r1, r9, r5}
 
 - compute unifrac using unifrac binaries, distance during training or precompute.
   https://github.com/biocore/unifrac-binaries
@@ -183,3 +187,4 @@ Starting from the first epoch and continuing every $f=5$ epochs:
 ## Testing encoder
 
 - Perccrustes analysis between corresponding unifrac and embedding sample distances in geometric space. Want high correlation.
+```
