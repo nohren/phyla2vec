@@ -1,7 +1,7 @@
 # Phyla2Vec
 
 This project develops a phylogeny-aware encoding and diffusion framework for microbiome data, aimed at unifying 16S rRNA samples collected with different primer regions and collection protocols. Current primer-based methods (e.g., V4 vs. V3–V4) produce datasets that are incompatible across labs, limiting the effective size of training data for health classification tasks.
-Our approach learns UniFrac-aligned embeddings of microbiome samples, i.e a relational manifold of the microbiome, that is robust to primer and collection variance, then trains a conditional diffusion model to generate biologically consistent synthetic samples in this latent space. The result is a primer-agnostic generative pipeline capable of augmenting microbiome datasets, improving classifier generalization, and supporting downstream biological discovery.
+Our approach learns UniFrac-aligned embeddings of microbiome samples, i.e a microbiome manifold, that is robust to primer and collection variance, then trains a conditional diffusion model to generate biologically consistent synthetic samples in this latent space. The result is a primer-agnostic generative pipeline capable of augmenting microbiome datasets, improving classifier generalization, and supporting downstream biological discovery.
 
 Core components:
 
@@ -42,51 +42,128 @@ https://drive.google.com/drive/folders/1ZoZcNtGAhEce-K6ldiekuRoMCkAK3RBy?usp=sha
 
 ### Data fetching and cleaning steps:
 
-1. look for suitable samples by the context they were created i.e Deblur._16S._.\*150nt. Check sample count and primer. If all looks good use that context.
+Stool samples represent the gut microbiome. How many stool samples exist in all contexts?
+
+Input:
 
 ```bash
-# Show Deblur 16S contexts trimmed to 150nt; this is for V4, can change for other primers
+redbiom search metadata "where sample_type in ('Stool','stool')"| wc -l
+```
+
+Output:
+
+```bash
+48244
+```
+
+The American Gut Project (study number 10317) may be the largest collection of stool samples in redbiom. What sample types exist in AGP and their counts?
+
+Input:
+
+```bash
+redbiom search metadata "where qiita_study_id == 10317" | redbiom summarize samples --category sample_type
+```
+
+Output:
+
+```bash
+Stool	29369
+control blank	4987
+Mouth	2587
+Blood (skin prick)	1166
+Forehead	833
+skin of cheek	400
+Left Hand	397
+Right Hand	322
+Nares	202
+Vaginal mucus	149
+Torso	126
+LabControl test	112
+Mucus	98
+not provided	81
+Axilla	59
+Ear wax	59
+Tears	55
+Left leg	53
+not applicable	32
+Hair	21
+Right leg	9
+control positive	3
+```
+
+What are all the contexts that exist for 150bp?
+
+```bash
 redbiom summarize contexts \
   | grep -Ei 'Deblur.*16S.*.*150nt'
 ```
 
-2. Pick one context and save as a shell variable
+- output a text file of all 150nt contexts
 
 ```bash
-export CTX="Deblur_2021.09-Illumina-16S-V4-150nt-ac8c0b"
+redbiom summarize contexts \
+  | grep -Ei 'Deblur.*16S.*150nt' \
+  | awk '{print $1}' > ctx_list.txt
 ```
 
-3. Get the biom samples... expect this step to take 20 to 30 min for large samples.
+1. Let's assemble stool datasets by context
 
-- use redbiom flags to filter any technical replicates or blank samples
+New way (multiple contexts):
 
 ```bash
-redbiom search metadata 'where qiita_study_id==10317' | \
-redbiom fetch samples --context $CTX --output v4.biom
+chmod +x run_stool.sh
+./run_stool.sh
 ```
 
-4. Inspect biom table
+Old way (single context):
+
+```bash
+export ctx="Deblur_2021.09-Illumina-16S-V4-150nt-ac8c0b"
+```
+
+```bash
+redbiom search metadata "where sample_type in ('Stool','stool')" \
+| redbiom fetch samples --context "$ctx" --output test.biom
+```
+
+Inspect biom table
 
 ```bash
 biom summarize-table -i v4.biom -o v4_summary.txt
 ```
 
-5. Assemble second dataset
-
-- Repeat steps 1 and 2 for all non V4 contexts getting stool samples from other studies.
-- use redbiom flags to filter any technical replicates or blank samples
+5. Clean table from blanks, negs, technical replicates and insufficient depth if any exist.
 
 ```bash
-redbiom search metadata 'where (body_site=="stool") and (qiita_study_id!=10317)' | \
-redbiom fetch samples --context $CTX --output other_stool.biom
+python data_cleaning/clean_biom.py \
+ --table data/v4_stool/v4_stool.biom \
+ --ambiguities data/v4_stool/v4_stool.biom.ambiguities \
+ --out data/v4_stool/v4_stool_cleaned.biom \
+ --clip-count 5000
 ```
 
-6. If still replicates or blanks, filter manually. technical replicates in metadata host_id. if multiple sample has host_id, keep only one with highest total observation count.
-   Maybe flag in redbiom for technical replicates and one for blanks?
+**beware**!!! of running commands that require stdin. They will hang forever even if you think they are doing something.
 
-7. Filtering features in dataset - Run each dataset though greengenes 2 https://github.com/biocore/q2-greengenes2 filter function to clean it.
+```bash
+#command causes redbiom to hang as select samples-from-metadata waits for stdin input.
+#This is not well documented.  No error is thrown.
+redbiom select samples-from-metadata |redbiom search samples --context $ctx
+```
 
-8. Preprocess dataset into model input format
+if you want metadata for all samples in a context:
+
+```bash
+redbiom search metadata "where sample_type in ('Stool','stool')" \
+| redbiom fetch sample-metadata --context $ctx --output example_meta.txt
+```
+
+6. Filtering features in dataset - Run each dataset though greengenes 2 https://github.com/biocore/q2-greengenes2 filter function to clean it.
+
+7. Preprocess dataset into model input format
+
+8. Get dataset metadata for downstream analysis
+
+```bash
 
 ## Training
 
@@ -100,3 +177,9 @@ Starting from the first epoch and continuing every $f=5$ epochs:
 ## Testing encoder
 
 - Perccrustes analysis between corresponding unifrac and embedding sample distances in geometric space. Want high correlation.
+
+```
+
+```
+
+```
