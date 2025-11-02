@@ -181,10 +181,11 @@ Starting from the first epoch and continuing every $f=5$ epochs:
   # not allowed
   sample1_rarefy = {r3, r3, r1, r9, r5}
 
+```
+
 - compute unifrac using unifrac binaries, distance during training or precompute.
   https://github.com/biocore/unifrac-binaries
 
 ## Testing encoder
 
 - Perccrustes analysis between corresponding unifrac and embedding sample distances in geometric space. Want high correlation.
-```
