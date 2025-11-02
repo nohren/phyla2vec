@@ -56,7 +56,7 @@ Output:
 48244
 ```
 
-The American Gut Project (study number 10317) may be the largest collection of stool samples in redbiom. What sample types exist in AGP and their counts?
+The American Gut Project (study number 10317) is the largest collection of stool samples in redbiom. What sample types exist in AGP and their counts?
 
 Input:
 
