@@ -25,6 +25,10 @@ Create uniform, biologically grounded representations of 16S microbiome data tha
 ```bash
 conda env create -f environment.yml
 conda activate phyla2vec
+
+# to update env
+conda env update -f environment.yml
+
 # install the right PyTorch for your machine:
 # macOS:
 pip install torch torchvision torchaudio
@@ -118,7 +122,7 @@ chmod +x run_stool.sh
 Old way (single context):
 
 ```bash
-export ctx="Deblur_2021.09-Illumina-16S-V4-150nt-ac8c0b"
+export ctx=Deblur_2021.09-Illumina-16S-V4-150nt-ac8c0b
 ```
 
 ```bash
@@ -150,16 +154,88 @@ python data_cleaning/clean_biom.py \
 redbiom select samples-from-metadata |redbiom search samples --context $ctx
 ```
 
-if you want metadata for all samples in a context:
-
-```bash
-redbiom search metadata "where sample_type in ('Stool','stool')" \
-| redbiom fetch sample-metadata --context $ctx --output example_meta.txt
-```
-
 6. Filtering features in dataset - Run each dataset though greengenes 2 https://github.com/biocore/q2-greengenes2 filter function to clean it.
 
-7. Preprocess dataset into model input format
+Reqiure linux OR Docker container to run QIIME2.
+Linux commands
+
+```bash
+sudo shutdown -h now
+```
+
+Docker commands
+
+```bash
+# Just increase memory all the way on docker desktop settings which is 23gb for me.
+docker run --rm -it \
+  --platform linux/amd64 \
+  -v "$(pwd)":/data \
+  quay.io/qiime2/amplicon:2025.10 \
+  bash
+
+# docker run --rm -it \
+#   --platform=linux/amd64 \
+#   --memory=32g \
+#   --memory-swap=36g \
+#   --cpus=7 \
+#   -v "$(pwd)":/data \
+#   quay.io/qiime2/amplicon:2025.10 \
+#   bash
+```
+
+Setup docker environment
+
+```bash
+source activate qiime2-2025.10
+
+#get gcc which you will need for pip install, greengenes2 does not mention this dependency
+apt-get update && apt-get install -y build-essential
+# install greengenes2
+pip install q2-greengenes2
+
+# if it doesn't see greengenes plugin, try this
+qiime dev refresh-cache   # make QIIME 2 see the new plugin
+
+```
+
+Greengenes2 Usage
+
+Convert from biom to qza
+
+```bash
+qiime tools import \
+  --input-path v4_stool_cleaned.biom \
+  --type 'FeatureTable[Frequency]' \
+  --input-format BIOMV210Format \
+  --output-path v4_stool_cleaned.qza
+```
+
+Greengenes2 filtering
+
+```bash
+qiime greengenes2 filter-features \
+    --i-feature-table v4_stool_cleaned.qza \
+    --i-reference 2024.09.phylogeny.asv.nwk.qza \
+    --o-filtered-feature-table v4_stool_cleaned_filtered.qza
+```
+
+Convert from qza to biom
+
+```bash
+qiime tools export \
+  --input-path v4_stool_cleaned_filtered.qza \
+  --output-path v4_stool_cleaned_filtered_biom
+```
+
+7. Get metadata for cleaned dataset
+
+````bash
+# via stdin
+# python id_to_txt.py --table feature-table.biom --out id_list.txt
+
+biom table-ids -i feature-table.biom | redbiom fetch sample-metadata --context "$ctx" --output sample-metadata.txt
+
+```
 
 8. Get dataset metadata for downstream analysis
 
@@ -181,7 +257,7 @@ Starting from the first epoch and continuing every $f=5$ epochs:
   # not allowed
   sample1_rarefy = {r3, r3, r1, r9, r5}
 
-```
+````
 
 - compute unifrac using unifrac binaries, distance during training or precompute.
   https://github.com/biocore/unifrac-binaries
