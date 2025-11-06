@@ -112,14 +112,7 @@ redbiom summarize contexts \
 
 1. Let's assemble stool datasets by context
 
-New way (multiple contexts):
-
-```bash
-chmod +x run_stool.sh
-./run_stool.sh
-```
-
-Old way (single context):
+Create for single:
 
 ```bash
 export ctx=Deblur_2021.09-Illumina-16S-V4-150nt-ac8c0b
@@ -127,13 +120,24 @@ export ctx=Deblur_2021.09-Illumina-16S-V4-150nt-ac8c0b
 
 ```bash
 redbiom search metadata "where sample_type in ('Stool','stool')" \
-| redbiom fetch samples --context "$ctx" --output test.biom
+| redbiom fetch samples --context "$ctx" --output v4_stool.biom
 ```
 
-Inspect biom table
+Create for multiple contexts:
 
 ```bash
+chmod +x run_stool.sh
+./run_stool.sh
+```
+
+Inspect Biom table
+
+```bash
+# summarize
 biom summarize-table -i v4.biom -o v4_summary.txt
+
+# ids to stdout
+biom table-ids -i v4_stool.biom
 ```
 
 5. Clean table from blanks, negs, technical replicates and insufficient depth if any exist.
@@ -157,11 +161,6 @@ redbiom select samples-from-metadata |redbiom search samples --context $ctx
 6. Filtering features in dataset - Run each dataset though greengenes 2 https://github.com/biocore/q2-greengenes2 filter function to clean it.
 
 Reqiure linux OR Docker container to run QIIME2.
-Linux commands
-
-```bash
-sudo shutdown -h now
-```
 
 Docker commands
 
@@ -229,12 +228,10 @@ qiime tools export \
 
 7. Get metadata for cleaned dataset
 
-````bash
+```bash
 # via stdin
-# python id_to_txt.py --table feature-table.biom --out id_list.txt
 
 biom table-ids -i feature-table.biom | redbiom fetch sample-metadata --context "$ctx" --output sample-metadata.txt
-
 ```
 
 8. Get dataset metadata for downstream analysis
@@ -257,7 +254,7 @@ Starting from the first epoch and continuing every $f=5$ epochs:
   # not allowed
   sample1_rarefy = {r3, r3, r1, r9, r5}
 
-````
+```
 
 - compute unifrac using unifrac binaries, distance during training or precompute.
   https://github.com/biocore/unifrac-binaries
