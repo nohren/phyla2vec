@@ -231,7 +231,7 @@ qiime tools export \
 ```bash
 # via stdin
 
-biom table-ids -i feature-table.biom | redbiom fetch sample-metadata --context "$ctx" --output sample-metadata.txt
+biom table-ids -i feature-table.biom | redbiom fetch sample-metadata --context "$ctx" --all-columns --output sample-all-col-metadata.txt
 ```
 
 8. Get dataset metadata for downstream analysis
