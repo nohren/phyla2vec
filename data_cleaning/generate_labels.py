@@ -1,45 +1,80 @@
 import argparse
 import pandas as pd
+from biom import load_table
 
+#adapters
+def acid_reflux_label(x: str) -> int:
+    positive = {
+        "Diagnosed by a medical professional (doctor, physician assistant)",
+        "Diagnosed by an alternative medicine practitioner",
+        "Self-diagnosed",
+    }
+    # x might be NaN, so guard with isinstance
+    return 1 if isinstance(x, str) and x in positive else 0
 
 def main():
     p = argparse.ArgumentParser(
-        description="outputs sample,label pairs"
+        description="Output sample,label pairs for samples in a BIOM table"
     )
-    p.add_argument("--label_id", required=True, help="label id in metadata")
-    p.add_argument("--meta", required=True, help="Input metadata filepath")
-    p.add_argument("--out", default="meta_cleaned.txt", help="Output keep-list (one sample ID per line)")
+    p.add_argument("--biom_in", required=True, help="Input BIOM filepath")
+    p.add_argument("--meta_in", required=True, help="Input metadata filepath")
+    p.add_argument("--label_id", required=True, help="Column name in metadata to use as label")
+    p.add_argument("--out", default="labels.txt", help="Labels output filepath")
     args = p.parse_args()
-    # 1. Canonical sample IDs you kept after replicate-resolution
-    kept_ids = None
 
-    #read text from file into an array
-    with open(args.sample_ids, "r") as f:
-        kept_ids = pd.Index([line.strip() for line in f])
+    # 1. Load BIOM table and get sample IDs
+    table = load_table(args.biom_in)
+    biom_sample_ids = list(table.ids(axis='sample'))
+    print("first id is ", biom_sample_ids[0])
+    print("last id is ", biom_sample_ids[-1])
+    biom_sample_set = set(biom_sample_ids)
+    print("Samples in BIOM table:", len(biom_sample_ids))
 
     # 2. Load metadata
-    meta = pd.read_table(args.meta, sep='\t', dtype=str)
-    # assume metadata has a sample ID column, e.g. 'sample_name' or '#SampleID'
-    id_col = '#SampleID'  # adjust to whatever it is
+    meta = pd.read_table(args.meta_in, sep='\t', dtype=str)
 
-    meta_samples = meta[id_col].astype(str)
+    # Assume metadata has a sample ID column named '#SampleID'
+    id_col = '#SampleID'
+    if id_col not in meta.columns:
+        raise ValueError(f"Metadata is missing required ID column '{id_col}'")
 
-    # 3. Filter metadata to only kept samples
-    meta_filtered = meta[meta_samples.isin(kept_ids)].copy()
+    if args.label_id not in meta.columns:
+        raise ValueError(f"Metadata is missing label column '{args.label_id}'")
 
-    print("Original metadata rows:", len(meta))
-    print("After intersect with kept replicates:", len(meta_filtered))
+    # 3. Keep only metadata rows whose IDs are in the BIOM table
+    # i might wanted to start with which labels are the most common... oh well
+    in_biom_mask = meta[id_col].isin(biom_sample_set)
+    meta_filtered = meta.loc[in_biom_mask, [id_col, args.label_id]].copy()
 
-    # 4. (Sanity) Check for biom-kept samples with missing metadata
-    missing_meta = kept_ids.difference(meta_filtered[id_col])
-    print("Kept samples with no metadata:", len(missing_meta))
-    print(list(missing_meta[:10]))
+    print("Metadata rows total:", len(meta))
+    print("Metadata rows with IDs in BIOM:", len(meta_filtered))
 
-    # remove replicate id form to become sample id form
-    meta_filtered[id_col] = [".".join(c.split(".")[:-1]) for c in meta_filtered[id_col]]
+    # 4. Align order to BIOM sample order
+    meta_filtered = (
+        meta_filtered
+        .set_index(id_col)
+        .reindex(biom_sample_ids)  # rows for samples not in metadata become NaN
+    )
 
-    # 5. Save cleaned metadata
+    missing_meta_ids = meta_filtered[meta_filtered[args.label_id].isna()].index.tolist()
+    if missing_meta_ids:
+        print("WARNING: samples in BIOM with no metadata label:", len(missing_meta_ids))
+        print("First few missing:", missing_meta_ids[:10])
+
+    if args.label_id == "acid_reflux":
+        meta_filtered[args.label_id] = meta_filtered[args.label_id].map(acid_reflux_label)
+
+    # Drop samples without labels
+    meta_filtered = meta_filtered.dropna(subset=[args.label_id])
+
+    # 5. Reset index and rename label column to 'label'
+    meta_filtered = meta_filtered.reset_index()
+    meta_filtered.rename(columns={args.label_id: "label", id_col: id_col}, inplace=True)
+
+    # 6. Save sample_id,label pairs
     meta_filtered.to_csv(args.out, sep='\t', index=False)
+    print(f"Wrote {len(meta_filtered)} sample,label pairs to {args.out}")
+
 
 if __name__ == "__main__":
     main()
