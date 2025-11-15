@@ -13,6 +13,7 @@ dependencies:
   - scipy
   - statsmodels
   - scikit-bio
+  - unifrac
   - jupyterlab
   - ipykernel
   - tqdm

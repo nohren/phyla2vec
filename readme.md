@@ -60,7 +60,7 @@ Output:
 48244
 ```
 
-The American Gut Project (study number 10317) is the largest collection of stool samples in redbiom. What sample types exist in AGP and their counts?
+The American Gut Project (study number 10317) is the largest collection of human stool samples in redbiom. What sample types exist in AGP and their counts?
 
 Input:
 
@@ -158,28 +158,17 @@ python data_cleaning/clean_biom.py \
 redbiom select samples-from-metadata |redbiom search samples --context $ctx
 ```
 
-6. Filtering features in dataset - Run each dataset though greengenes 2 https://github.com/biocore/q2-greengenes2 filter function to clean it.
+6. Filtering features in dataset - Run each dataset though greengenes 2 https://github.com/biocore/q2-greengenes2 filter function compare with phylogeny. We use 2024.09.phylogeny.asv.nwk.qza as reference. You will need to install QIIME2 thru your platform of choice. Here we use docker.
 
-Reqiure linux OR Docker container to run QIIME2.
-
-Docker commands
+Docker commands for QIIME2
 
 ```bash
-# Just increase memory all the way on docker desktop settings which is 23gb for me.
+# I had oom issues with the next computing step so increasing memory to 23gb worked via docker desktop.
 docker run --rm -it \
   --platform linux/amd64 \
   -v "$(pwd)":/data \
   quay.io/qiime2/amplicon:2025.10 \
   bash
-
-# docker run --rm -it \
-#   --platform=linux/amd64 \
-#   --memory=32g \
-#   --memory-swap=36g \
-#   --cpus=7 \
-#   -v "$(pwd)":/data \
-#   quay.io/qiime2/amplicon:2025.10 \
-#   bash
 ```
 
 Setup docker environment
@@ -218,13 +207,49 @@ qiime greengenes2 filter-features \
     --o-filtered-feature-table v4_stool_cleaned_filtered.qza
 ```
 
-Convert from qza to biom
-
 ```bash
 qiime tools export \
   --input-path v4_stool_cleaned_filtered.qza \
   --output-path v4_stool_cleaned_filtered_biom
 ```
+
+Create subset qza file of our filtered table for unifrac calculations downstream based on our filtered table
+
+```bash
+qiime phylogeny filter-tree \
+  --i-tree 2024.09.phylogeny.asv.nwk.qza \
+  --i-table v4_stool_cleaned_filtered.qza \
+  --o-filtered-tree table-tree.qza
+```
+
+Conververt this file to newick for unifrac calculations downstream
+
+```bash
+qiime tools export \
+  --input-path table-tree.qza \
+  --output-path exported-tree
+# gives exported-tree/tree.nwk
+```
+
+Compute unifrac distance matrix for filtered table
+
+```bash
+qiime diversity beta-phylogenetic \
+  --i-table v4_stool_cleaned_filtered.qza \
+  --i-phylogeny 2024.09.phylogeny.asv.nwk.qza \
+  --p-metric unweighted_unifrac \
+  --o-distance-matrix unifrac.qza
+```
+
+Export
+
+```bash
+qiime tools export \
+  --input-path unifrac.qza \
+  --output-path exported-dist
+```
+
+Convert from qza to biom
 
 7. Get metadata for cleaned dataset
 
