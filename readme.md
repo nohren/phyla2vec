@@ -260,6 +260,24 @@ biom table-ids -i feature-table.biom | redbiom fetch sample-metadata --context "
 ```
 
 8. Get dataset metadata for downstream analysis
+   check out https://qiita.ucsd.edu for more info on metadata fields.
+
+9. Remote work
+
+```bash
+# start once
+tmux new -s work
+
+# later, from any SSH login
+tmux attach -t work
+
+# when you need to leave but keep things running
+Ctrl-b d
+
+
+```
+
+````bash
 
 ## Training
 
@@ -279,7 +297,7 @@ Starting from the first epoch and continuing every $f=5$ epochs:
   # not allowed
   sample1_rarefy = {r3, r3, r1, r9, r5}
 
-```
+````
 
 - compute unifrac using unifrac binaries, distance during training or precompute.
   https://github.com/biocore/unifrac-binaries
