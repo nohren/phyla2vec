@@ -17,6 +17,7 @@ dependencies:
   - jupyterlab
   - ipykernel
   - tqdm
+  - scikit-learn
   - pyarrow # fast I/O for big TSV/CSV
   - biopython # handy for seq/taxonomy utils
   - pip # <- needed so the pip section works

@@ -2,6 +2,49 @@ import argparse
 import pandas as pd
 from biom import load_table
 
+continent_map = {
+"PT": "Europe",
+"CY": "Middle East",          # Cyprus – politically EU; you can relabel to 'Middle East' if you prefer
+"AU": "Oceania",
+"AT": "Europe",
+"FI": "Europe",
+"DE": "Europe",
+"US": "North America",
+"USA": "North America",
+"MX": "North America",
+"PL": "Europe",
+"TH": "Asia",
+"NZ": "Oceania",
+"United Kingdom": "Europe",
+"GB": "Europe",
+"Israel": "Middle East",        # or 'Middle East' if you want that granularity
+"FR": "Europe",
+"not collected": "Unknown",
+"BE": "Europe",
+"MT": "Europe",
+"SK": "Europe",
+"HU": "Europe",
+"JE": "Europe",          # Jersey
+"SG": "Asia",
+"PH": "Asia",
+"PR": "North America",   # Puerto Rico (Caribbean, but NA for your purposes)
+"IE": "Europe",
+"CH": "Europe",
+"ES": "Europe",
+"JP": "Asia",
+"SE": "Europe",
+"CZ": "Europe",
+"CA": "North America",
+"NO": "Europe",
+"IT": "Europe",
+"NL": "Europe",
+"DK": "Europe",
+"CN": "Asia",
+"RSA": "Africa",
+"Ghana": "Africa",
+"Jamaica": "North America",
+}
+ 
 #adapters
 def acid_reflux_label(x: str) -> int:
     positive = {
@@ -11,6 +54,13 @@ def acid_reflux_label(x: str) -> int:
     }
     # x might be NaN, so guard with isinstance
     return 1 if isinstance(x, str) and x in positive else 0
+
+def get_country(geo_loc_name):
+    return geo_loc_name.split(":")[0].strip()
+
+def geo_loc_name_label(x: str) -> str:
+    country = get_country(x)
+    return continent_map.get(country, "Other")
 
 def main():
     p = argparse.ArgumentParser(
@@ -63,6 +113,10 @@ def main():
 
     if args.label_id == "acid_reflux":
         meta_filtered[args.label_id] = meta_filtered[args.label_id].map(acid_reflux_label)
+        
+    if args.label_id == "geo_loc_name":
+        # Simplify to continent
+        meta_filtered[args.label_id] = meta_filtered[args.label_id].map(geo_loc_name_label)
 
     # Drop samples without labels
     meta_filtered = meta_filtered.dropna(subset=[args.label_id])
