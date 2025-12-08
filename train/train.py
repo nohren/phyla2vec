@@ -1,10 +1,10 @@
 import numpy as np
 
 import biom
-#import unifrac
+import unifrac
 import h5py
 import tempfile
-#from skbio import TreeNode
+from skbio import TreeNode
 
 import torch
 import torch.nn as nn
@@ -12,35 +12,54 @@ from torch.utils.data import Dataset, DataLoader
 import os
 import torch.nn.functional as F
 
-BIOM_PATH = "feature-table-5000.biom"
-TREE_PATH = "tree.nwk"
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+########################################
+# Config
+########################################
 
-RAREFY_DEPTH = 5000
-MODEL_READS = 1024
-MAX_SAMPLES = 5000
+# Use your 5000-sample subset + its tree
+BIOM_PATH = "train_filtered/train.biom"
+TREE_PATH = "train_filtered/tree.nwk"
 
-SEQ_LEN = 150
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+
+RAREFY_DEPTH = 5000                # target reads per sample (for model/UniFrac alignment)
+MODEL_READS = 1024                 # reads per sample fed to the model
+MAX_SAMPLES = None                 # cap number of samples per epoch
+
+SEQ_LEN = 150                      # 150bp sequences
 EMBED_DIM = 128
-BATCH_SIZE = 16
+BATCH_SIZE = 8                     # adjust for memory / speed
 LR = 1e-4
 NUM_EPOCHS = 20
-RAREFY_INTERVAL = 5
+RAREFY_INTERVAL = 5                # re-rarefy every 5 epochs
+
+BETA_KL = 1e-4
+USE_UNIFRAC_LOSS = True   # set True if we want UniFrac loss in VAE
+UNIFRAC_WEIGHT = 50.0
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+########################################
+# Nucleotide encoding
+########################################
 
 NUC_TO_ID = {
     "A": 0,
     "C": 1,
     "G": 2,
     "T": 3,
-    "N": 4,
+    "N": 4,  # catch-all
 }
 VOCAB_SIZE = len(NUC_TO_ID)
 
 
 def encode_sequence(seq, max_len=SEQ_LEN):
+    """
+    Encode a nucleotide string (feature ID) into fixed-length int IDs.
+    Pads/truncates to max_len.
+    """
     seq = seq.upper()
     ids = [NUC_TO_ID.get(ch, NUC_TO_ID["N"]) for ch in seq[:max_len]]
     if len(ids) < max_len:
@@ -48,19 +67,31 @@ def encode_sequence(seq, max_len=SEQ_LEN):
     return np.array(ids, dtype=np.uint8)
 
 
-def filter_samples_by_depth(table, depth):
+########################################
+# Data prep: rarefaction and subsampling
+########################################
 
+def filter_samples_by_depth(table, depth):
+    """
+    Filter samples to those with total count >= depth.
+    """
     def sample_filter(vals, sid, md):
         return vals.sum() >= depth
 
     return table.filter(sample_filter, axis="sample", inplace=False)
 
 
-def subsample_samples(table, max_samples, seed=0):
+def subsample_samples(table, max_samples=None, seed=0):
+    """
+    Optionally randomly select up to max_samples samples from the table.
 
+    If max_samples is None or <= 0, use all samples (no subsampling).
+    """
     sample_ids = list(table.ids(axis="sample"))
     n = len(sample_ids)
-    if n <= max_samples:
+
+    # No subsampling: use all samples
+    if (max_samples is None) or (max_samples <= 0) or (n <= max_samples):
         return table, sample_ids
 
     rng = np.random.default_rng(seed)
@@ -71,31 +102,56 @@ def subsample_samples(table, max_samples, seed=0):
     return sub, chosen
 
 
-def prepare_epoch_data(full_table, depth, seq_len, model_reads, max_samples, seed=0):
 
+def prepare_epoch_data(full_table, depth, seq_len, model_reads, max_samples=None, seed=0):
+    """
+    For one "rarefaction epoch":
+
+      1. Filter samples with >= depth total reads.
+      2. Subsample up to max_samples samples.
+      3. Rarefy each sample to 'depth' using BIOM's subsample (without replacement).
+      4. Build:
+         - rare_table: rarefied BIOM table for these samples
+         - sample_ids: list of sample IDs
+         - obs_ids: list of observation IDs (150bp feature IDs)
+         - sample_tokens: (num_samples, model_reads, seq_len) nucleotide token arrays
+
+    Returns:
+      sample_tokens: np.ndarray, shape (num_samples, model_reads, seq_len), uint8
+      rare_table: biom.Table (rarefied)
+      sample_ids: list of sample IDs (order matches sample_tokens rows)
+      obs_ids: list of observation IDs (order matches columns in rare_table)
+    """
+
+    # 1) Filter samples with enough total counts
     filtered = filter_samples_by_depth(full_table, depth)
 
+    # 2) Subsample samples to cap memory/compute
     filtered_sub, chosen_ids = subsample_samples(filtered, max_samples, seed=seed)
 
+    # 3) Rarefy to 'depth' per sample (without replacement)
     rare = filtered_sub.subsample(depth, axis="sample")
 
     sample_ids = list(rare.ids(axis="sample"))
-    obs_ids = list(rare.ids(axis="observation"))
+    obs_ids = list(rare.ids(axis="observation"))  # 150bp feature IDs
 
     num_samples = len(sample_ids)
     num_obs = len(obs_ids)
 
     print(f"  Rarefied samples: {num_samples}, observations: {num_obs}")
 
+    # Encode each 150bp feature sequence once
     obs_tokens = np.stack(
         [encode_sequence(seq, max_len=seq_len) for seq in obs_ids],
         axis=0
-    )
+    )  # (num_obs, seq_len)
 
+    # We'll feed only `model_reads` reads per sample to the model
     model_reads = min(depth, model_reads)
     sample_tokens = np.zeros((num_samples, model_reads, seq_len), dtype=np.uint8)
 
     for j, sid in enumerate(sample_ids):
+        # Rarefied counts over observations for this sample (sparse or dense)
         counts = np.asarray(rare.data(id=sid, axis="sample")).flatten()
         counts_int = counts.astype(np.int64)
 
@@ -105,8 +161,11 @@ def prepare_epoch_data(full_table, depth, seq_len, model_reads, max_samples, see
                 f"Rarefied sample {sid} sums to {total}, expected {depth}"
             )
 
+        # Expand counts to explicit indices: e.g., [3,1,0,2] -> [0,0,0,1,3,3]
         expanded_full = np.repeat(np.arange(num_obs, dtype=np.int64), counts_int)
+        # expanded_full has length == depth
 
+        # For the model, sample up to `model_reads` reads without replacement
         if model_reads < depth:
             chosen_idx = np.random.choice(
                 depth, size=model_reads, replace=False
@@ -115,26 +174,41 @@ def prepare_epoch_data(full_table, depth, seq_len, model_reads, max_samples, see
         else:
             expanded = expanded_full
 
-        np.random.shuffle(expanded)
+        np.random.shuffle(expanded)  # randomize read order for the model
         sample_tokens[j] = obs_tokens[expanded]
 
     return sample_tokens, rare, sample_ids, obs_ids
 
+
+########################################
+# Dataset
+########################################
+
 class SampleSequenceDataset(Dataset):
+    """
+    Each item is a single sample:
+      seq: (num_reads=MODEL_READS, seq_len=SEQ_LEN) int64 tokens
+      idx: sample index (for indexing sample_ids)
+    """
 
     def __init__(self, sample_tokens):
+        # sample_tokens: (N_samples, model_reads, seq_len), uint8
         self.sample_tokens = sample_tokens
 
     def __len__(self):
         return self.sample_tokens.shape[0]
 
     def __getitem__(self, idx):
-        seqs = self.sample_tokens[idx]
+        seqs = self.sample_tokens[idx]  # (R, L)
         return {
             "idx": idx,
-            "seq": torch.from_numpy(seqs.astype(np.int64)),
+            "seq": torch.from_numpy(seqs.astype(np.int64)),  # (R, L)
         }
 
+
+########################################
+# Model: two-level Transformer encoder
+########################################
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=512):
@@ -151,11 +225,16 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe)
 
     def forward(self, x):
+        # x: (batch, seq_len, d_model)
         seq_len = x.size(1)
         return x + self.pe[:, :seq_len, :]
 
 
 class UniFracEncoder(nn.Module):
+    """
+    Level 1: Transformer over nucleotides within each 150bp sequence.
+    Level 2: Transformer over sequences (reads) within each sample.
+    """
 
     def __init__(
         self,
@@ -172,10 +251,13 @@ class UniFracEncoder(nn.Module):
         self.seq_len = seq_len
         self.embed_dim = embed_dim
 
+        # Embedding for nucleotides
         self.embed = nn.Embedding(vocab_size, embed_dim)
 
+        # Positional encoding over nucleotide positions
         self.pos_enc_nuc = PositionalEncoding(embed_dim, max_len=seq_len)
 
+        # Transformer over nucleotides (per sequence)
         nuc_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
             nhead=n_heads,
@@ -187,8 +269,10 @@ class UniFracEncoder(nn.Module):
             nuc_layer, num_layers=num_layers_nuc
         )
 
+        # Positional encoding over sequences (reads) within a sample
         self.pos_enc_seq = PositionalEncoding(embed_dim, max_len=MODEL_READS)
 
+        # Transformer over sequence embeddings (per sample)
         seq_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
             nhead=n_heads,
@@ -201,25 +285,43 @@ class UniFracEncoder(nn.Module):
         )
 
     def forward(self, seq_ids):
+        """
+        seq_ids: (B, R, L)
+          B = batch size
+          R = number of reads per sample (MODEL_READS)
+          L = nucleotide positions (SEQ_LEN)
+
+        Returns:
+          sample_emb: (B, EMBED_DIM)
+        """
         B, R, L = seq_ids.shape
         assert L == self.seq_len, "Unexpected sequence length"
 
-        x = seq_ids.view(B * R, L)
-        x = self.embed(x)
-        x = self.pos_enc_nuc(x)
-        x = self.nuc_encoder(x)
+        # -------- Level 1: nucleotide-level transformer per sequence --------
+        x = seq_ids.view(B * R, L)       # (B*R, L)
+        x = self.embed(x)                # (B*R, L, D)
+        x = self.pos_enc_nuc(x)          # (B*R, L, D)
+        x = self.nuc_encoder(x)          # (B*R, L, D)
 
-        seq_emb = x.mean(dim=1)
-        seq_emb = seq_emb.view(B, R, -1)
+        # Mean over nucleotides -> per-sequence embedding
+        seq_emb = x.mean(dim=1)          # (B*R, D)
+        seq_emb = seq_emb.view(B, R, -1) # (B, R, D)
 
-        y = self.pos_enc_seq(seq_emb)
-        y = self.seq_encoder(y)
-        sample_emb = y.mean(dim=1)
+        # -------- Level 2: sequence-level transformer per sample --------
+        y = self.pos_enc_seq(seq_emb)    # (B, R, D)
+        y = self.seq_encoder(y)          # (B, R, D)
+        sample_emb = y.mean(dim=1)       # (B, D)
 
         return sample_emb
 
 
 class MLPUniFracEncoder(nn.Module):
+    """
+    Simpler encoder:
+      - Embed nucleotides
+      - Average over reads and positions -> (B, D)
+      - Pass through a small MLP -> (B, D)
+    """
 
     def __init__(
         self,
@@ -243,24 +345,42 @@ class MLPUniFracEncoder(nn.Module):
             mlp_layers.append(nn.ReLU())
             mlp_layers.append(nn.Dropout(dropout))
             in_dim = hidden_dim
-        mlp_layers.append(nn.Linear(in_dim, embed_dim))
+        mlp_layers.append(nn.Linear(in_dim, embed_dim))  # final to EMBED_DIM
 
         self.mlp = nn.Sequential(*mlp_layers)
 
     def forward(self, seq_ids):
+        """
+        seq_ids: (B, R, L) of int64 tokens
 
+        Returns:
+          sample_emb: (B, EMBED_DIM)
+        """
         B, R, L = seq_ids.shape
         assert L == self.seq_len, "Unexpected sequence length"
 
+        # Embed tokens: (B, R, L, D)
         x = self.embed(seq_ids)
+
+        # Global mean pooling over reads + positions -> (B, D)
         sample_emb = x.mean(dim=(1, 2))
 
-        sample_emb = self.mlp(sample_emb)
+        # MLP to get final embedding
+        sample_emb = self.mlp(sample_emb)  # (B, D)
 
         return sample_emb
 
 
 class UniFracVAE(nn.Module):
+    """
+    VAE where the encoder is exactly your UniFracEncoder stack.
+
+    Encoder: seq_ids -> sample_emb (UniFracEncoder) -> mu, logvar
+    Decoder: z -> nucleotide frequency logits per sample (length VOCAB_SIZE)
+
+    Reconstruction target: per-sample nucleotide frequency vector derived
+    from the input seq_ids.
+    """
 
     def __init__(
         self,
@@ -291,9 +411,11 @@ class UniFracVAE(nn.Module):
         self.embed_dim = embed_dim
         self.vocab_size = vocab_size
 
+        # Latent heads
         self.fc_mu = nn.Linear(embed_dim, latent_dim)
         self.fc_logvar = nn.Linear(embed_dim, latent_dim)
 
+        # Simple decoder MLP: z -> vocab_size logits
         self.decoder = nn.Sequential(
             nn.Linear(latent_dim, 128),
             nn.ReLU(),
@@ -301,54 +423,95 @@ class UniFracVAE(nn.Module):
         )
 
     def encode(self, seq_ids):
-
+        """
+        seq_ids: (B, R, L)
+        Returns: mu, logvar  each (B, latent_dim)
+        """
         sample_emb = self.encoder_backbone(seq_ids)
         mu = self.fc_mu(sample_emb)
         logvar = self.fc_logvar(sample_emb)
         return mu, logvar
 
     def reparameterize(self, mu, logvar):
+        """
+        Standard Gaussian reparam: z = mu + eps * exp(0.5*logvar)
+        """
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
 
     def decode(self, z):
+        """
+        z: (B, latent_dim)
+        Returns:
+          recon_logits: (B, vocab_size)
+        """
         return self.decoder(z)
 
     def forward(self, seq_ids):
+        """
+        seq_ids: (B, R, L)
+
+        Returns:
+          recon_logits: (B, vocab_size)
+          mu, logvar: (B, latent_dim)
+          target_freqs: (B, vocab_size)  # reconstruction target
+        """
         B, R, L = seq_ids.shape
 
         with torch.no_grad():
+            # One-hot: (B, R, L, vocab_size)
             one_hot = F.one_hot(seq_ids, num_classes=self.vocab_size).float()
+            # Average over reads and positions -> (B, vocab_size)
             target_freqs = one_hot.mean(dim=(1, 2))
 
+        # ----- Encoder -----
         mu, logvar = self.encode(seq_ids)
         z = self.reparameterize(mu, logvar)
 
-        recon_logits = self.decode(z)
+        # ----- Decoder -----
+        recon_logits = self.decode(z)  # (B, vocab_size)
 
         return recon_logits, mu, logvar, target_freqs
 
 def vae_loss(recon_logits, target_freqs, mu, logvar, beta=1.0):
+    """
+    recon_logits: (B, vocab_size), raw logits
+    target_freqs: (B, vocab_size), in [0,1] (nucleotide frequencies)
+    mu, logvar: (B, latent_dim)
 
+    Uses:
+      - Reconstruction: BCEWithLogitsLoss on nucleotide frequencies
+      - KL divergence to N(0, I), weighted by beta
+    """
     recon_loss = F.binary_cross_entropy_with_logits(
         recon_logits,
         target_freqs,
         reduction="sum",
     )
-
     kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
     B = recon_logits.size(0)
     recon_loss = recon_loss / B
     kl = kl / B
 
-    return recon_loss + beta * kl, recon_loss, kl
+    total = recon_loss + beta * kl
+    return total, recon_loss, kl
 
+
+
+
+
+########################################
+# UniFrac distance helpers
+########################################
 
 def pairwise_euclidean_dist(x):
-
-    sq_norms = (x ** 2).sum(dim=1, keepdim=True)   
+    """
+    x: (B, D)
+    returns: (B, B) Euclidean distance matrix
+    """
+    sq_norms = (x ** 2).sum(dim=1, keepdim=True)   # (B, 1)
     sq_dist = sq_norms + sq_norms.t() - 2.0 * (x @ x.t())
     sq_dist = torch.clamp(sq_dist, min=0.0)
     dist = torch.sqrt(sq_dist + 1e-8)
@@ -393,8 +556,8 @@ def main():
     )
     id_to_dm_idx = {sid: i for i, sid in enumerate(dm_ids)}
 
-    model = UniFracEncoder().to(DEVICE)
-    #model = MLPUniFracEncoder().to(DEVICE)
+    #model = UniFracEncoder().to(DEVICE)
+    model = MLPUniFracEncoder().to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
     sample_tokens = None
@@ -406,6 +569,7 @@ def main():
     dataset_to_dm_idx = None
 
     for epoch in range(NUM_EPOCHS):
+        # Re-rarefy every RAREFY_INTERVAL epochs
         if epoch % RAREFY_INTERVAL == 0:
             print(f"\n[Epoch {epoch+1}] Re-rarefying ...")
             sample_tokens, rare_table, sample_ids, obs_ids = prepare_epoch_data(
@@ -414,7 +578,7 @@ def main():
                 SEQ_LEN,
                 MODEL_READS,
                 MAX_SAMPLES,
-                seed=epoch,
+                seed=epoch,   # change seed each time for different subset
             )
 
             dataset = SampleSequenceDataset(sample_tokens)
@@ -426,6 +590,7 @@ def main():
             )
             print(f"  Num samples after filtering+subsample: {len(dataset)}")
 
+            # Map this epoch's sample_ids to rows in the global UniFrac DM
             try:
                 dataset_to_dm_idx = np.array(
                     [id_to_dm_idx[sid] for sid in sample_ids],
@@ -443,11 +608,11 @@ def main():
         num_batches = 0
 
         for batch in dataloader:
-            seq = batch["seq"].to(DEVICE)   
-            idx = batch["idx"].to(DEVICE)   
+            seq = batch["seq"].to(DEVICE)   # (B, R, L)
+            idx = batch["idx"].to(DEVICE)   # (B,)
 
             optimizer.zero_grad()
-            emb = model(seq)
+            emb = model(seq)                # (B, D)
 
             loss = distance_matching_loss_batch(
                 emb,
@@ -464,7 +629,8 @@ def main():
 
         avg_loss = epoch_loss / max(1, num_batches)
         print(f"Epoch {epoch+1}/{NUM_EPOCHS} - Loss: {avg_loss:.6f}")
-        save_path = f"/data/nicklas/scratch/unifrac_mlp_encoder_epoch_{epoch+1}.pt"
+        # Save model checkpoint
+        save_path = f"/data/nicklas/scratch/pres_mlp_encoder_epoch_{epoch+1}.pt"
         torch.save({
             "epoch": epoch + 1,
             "model_state_dict": model.state_dict(),
@@ -478,8 +644,19 @@ def main():
     print("Training finished.")
 
 def main_vae():
-
+    # Load full BIOM table once (for counts + sequences)
     full_table = biom.load_table(BIOM_PATH)
+
+    # Optional: compute UniFrac DM if we want UniFrac loss
+    unifrac_dm_full = None
+    id_to_dm_idx = None
+    if USE_UNIFRAC_LOSS:
+        print("Computing full unweighted UniFrac distance matrix from files for VAE ...")
+        unifrac_dm_full, dm_ids = compute_unweighted_unifrac_matrix_from_files(
+            BIOM_PATH,
+            TREE_PATH,
+        )
+        id_to_dm_idx = {sid: i for i, sid in enumerate(dm_ids)}
 
     model = UniFracVAE().to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
@@ -490,9 +667,9 @@ def main_vae():
     obs_ids = None
     dataset = None
     dataloader = None
+    dataset_to_dm_idx = None
 
     for epoch in range(NUM_EPOCHS):
-
         if epoch % RAREFY_INTERVAL == 0:
             print(f"\n[Epoch {epoch+1}] Re-rarefying for VAE ...")
             sample_tokens, rare_table, sample_ids, obs_ids = prepare_epoch_data(
@@ -513,40 +690,75 @@ def main_vae():
             )
             print(f"  Num samples after filtering+subsample: {len(dataset)}")
 
+            if USE_UNIFRAC_LOSS:
+                try:
+                    dataset_to_dm_idx = np.array(
+                        [id_to_dm_idx[sid] for sid in sample_ids],
+                        dtype=np.int64,
+                    )
+                except KeyError as e:
+                    missing = str(e)
+                    raise RuntimeError(
+                        f"Sample ID {missing} from rarefied table not found in UniFrac "
+                        f"distance matrix IDs. Check that BIOM and tree.nwk match."
+                    )
+
         model.train()
         epoch_loss = 0.0
         epoch_recon = 0.0
         epoch_kl = 0.0
+        epoch_unifrac = 0.0
         num_batches = 0
 
         for batch in dataloader:
-            seq = batch["seq"].to(DEVICE)
+            seq = batch["seq"].to(DEVICE)   # (B, R, L)
+            idx = batch["idx"].to(DEVICE)   # (B,)
 
             optimizer.zero_grad()
             recon_logits, mu, logvar, target_freqs = model(seq)
 
             target_freqs = target_freqs.to(DEVICE)
 
-            loss, recon_loss, kl_loss = vae_loss(
-                recon_logits, target_freqs, mu, logvar, beta=1.0
+            # Base VAE loss with KL weighted by BETA_KL
+            vae_total, recon_loss, kl_loss = vae_loss(
+                recon_logits, target_freqs, mu, logvar, beta=BETA_KL
             )
-            loss.backward()
+
+            total_loss = vae_total
+
+            # Optional UniFrac distance-matching term on the latent means mu
+            unifrac_loss = torch.tensor(0.0, device=DEVICE)
+            if USE_UNIFRAC_LOSS and unifrac_dm_full is not None and dataset_to_dm_idx is not None:
+                unifrac_loss = distance_matching_loss_batch(
+                    embeddings=mu,           # (B, latent_dim)
+                    batch_indices=idx,       # indices into this epoch's dataset
+                    unifrac_dm=unifrac_dm_full,
+                    dataset_to_dm_idx=dataset_to_dm_idx,
+                )
+                total_loss = total_loss + UNIFRAC_WEIGHT * unifrac_loss
+
+            total_loss.backward()
             optimizer.step()
 
-            epoch_loss += loss.item()
+            epoch_loss += total_loss.item()
             epoch_recon += recon_loss.item()
             epoch_kl += kl_loss.item()
+            epoch_unifrac += unifrac_loss.item()
             num_batches += 1
 
         avg_loss = epoch_loss / max(1, num_batches)
         avg_recon = epoch_recon / max(1, num_batches)
         avg_kl = epoch_kl / max(1, num_batches)
+        avg_unifrac = epoch_unifrac / max(1, num_batches) if USE_UNIFRAC_LOSS else 0.0
+
         print(
             f"VAE Epoch {epoch+1}/{NUM_EPOCHS} "
-            f"- Total: {avg_loss:.6f}, Recon: {avg_recon:.6f}, KL: {avg_kl:.6f}"
+            f"- Total: {avg_loss:.6f}, Recon: {avg_recon:.6f}, "
+            f"KL (beta={BETA_KL}): {avg_kl:.6f}, "
+            f"UniFrac: {avg_unifrac:.6f}"
         )
 
-        save_path = f"/data/nicklas/scratch/unifrac_vae_epoch_{epoch+1}.pt"
+        save_path = f"/data/nicklas/scratch/pres_unifrac_vae_epoch_{epoch+1}.pt"
         torch.save({
             "epoch": epoch + 1,
             "model_state_dict": model.state_dict(),
@@ -554,14 +766,16 @@ def main_vae():
             "loss": avg_loss,
             "recon_loss": avg_recon,
             "kl_loss": avg_kl,
+            "unifrac_loss": avg_unifrac,
             "sample_ids": sample_ids,
         }, save_path)
         print(f"Saved VAE checkpoint to {save_path}")
+
 
     print("VAE training finished.")
 
 
 
 if __name__ == "__main__":
-    #main()
-    main_vae()
+    main()
+    #main_vae()
