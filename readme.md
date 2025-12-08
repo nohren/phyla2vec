@@ -305,3 +305,9 @@ Starting from the first epoch and continuing every $f=5$ epochs:
 ## Testing encoder
 
 - Perccrustes analysis between corresponding unifrac and embedding sample distances in geometric space. Want high correlation.
+
+Experiments/Findings (lower the better over baseline 81% mean pooling):
+- Attention pooling linear -6% corr over mean pooling
+- Attention pooling non linear -5% corr over mean pooling
+- Rarefaction every 1 epochs and 3800 reads -2% corr over every 5 epochs and 1024 reads.  Shows that more frequent rarefaction and higher read counts help a tiny bit.  Maybe it sees more of the training distribution.
+- Rarefaction every 10 epochs and 3800 reads did worse +1% from every 5 epochs and 1024 reads, given linear attention pooling.  Less training distribution coverage, less rarefaction, maybe the amount of rarefaction > read count in terms of importance of representing the true distribution.

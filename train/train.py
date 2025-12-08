@@ -235,15 +235,27 @@ class AttnPool1D(nn.Module):
     Output: pooled (B, D)
 
     Learns a scalar weight per position N, then softmax → weighted sum.
+    
+    https://aclanthology.org/N16-1174.pdf "word attention"
+    - name is a misnomer, there's no self attention here
+    - its an mlp ranker really that scores each position invidivually. That being said each position is already infused with relationships to others due upstream transformer
+    - after mlp then softmax through the logits to get weights, then weighted sum over positions to get pooled output.  Tanh for -> [-1,1] bounded activations
+    - seems to work better than mean pooling, gives the model more expressivity in pooling.
     """
-    def __init__(self, dim):
+    def __init__(self, dim, hidden=128):
         super().__init__()
-        self.proj = nn.Linear(dim, 1)
+        self.proj = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.Tanh(),
+            nn.Linear(hidden, 1) # # (B, N, 1) weights
+        )
 
     def forward(self, x):
-        # x: (B, N, D)
-        weights = self.proj(x).squeeze(-1)      # (B, N)
-        weights = torch.softmax(weights, dim=1) # (B, N)
+        # x: (B, N, D) i.e (B*R, L, D) 
+        weights = self.proj(x).squeeze(-1) # (B, N)
+        # learns a weighted average over N positions
+        weights = torch.softmax(weights, dim=1) # softmax over weight logits
+        # apply learned weights and sum over N positions to get (B, D)
         pooled = (x * weights.unsqueeze(-1)).sum(dim=1)  # (B, D)
         return pooled
 

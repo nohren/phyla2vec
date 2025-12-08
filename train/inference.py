@@ -18,14 +18,14 @@ from train import (
     MODEL_READS,
     MAX_SAMPLES,
     DEVICE,
-    RAREFY_DEPTH
+    RAREFY_DEPTH,
+    BATCH_SIZE,
 )
 
 # ----- CONFIG -----
 BIOM_PATH = "train_filtered/train.biom"          # same as training
-CKPT_PATH = "pres_transformer_encoder_epoch_20.pt"       # your 20-epoch checkpoint
-OUT_TSV = "embeddings_epoch20.tsv"
-BATCH_SIZE = 8                              
+CKPT_PATH = "pres_transformer_encoder_epoch_16.pt"       # your 20-epoch checkpoint
+OUT_TSV = "embeddings_epoch16.tsv"                         
 
 @torch.no_grad()
 def main():
