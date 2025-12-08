@@ -92,7 +92,7 @@ def main(EMBEDDINGS_FP, UNIFRAC_FP, N_PROCRUSTES_DIMS = 128):
         fig, ax = plt.subplots(figsize=(6, 6))
 
         ax.scatter(mtx1[:, 0], mtx1[:, 1], marker='o', alpha=0.6, label="PCoA (UniFrac)")
-        ax.scatter(mtx2[:, 0], mtx2[:, 1], marker='x', alpha=0.6, label="Your 128D embeddings (PCA+Procrustes)")
+        ax.scatter(mtx2[:, 0], mtx2[:, 1], marker='x', alpha=0.6, label="Our 128D embeddings (PCA+Procrustes)")
 
         ax.set_xlabel("PC 1 (aligned)")
         ax.set_ylabel("PC 2 (aligned)")

@@ -24,8 +24,8 @@ from train import (
 
 # ----- CONFIG -----
 BIOM_PATH = "train_filtered/train.biom"          # same as training
-CKPT_PATH = "pres_transformer_encoder_epoch_16.pt"       # your 20-epoch checkpoint
-OUT_TSV = "embeddings_epoch16.tsv"                         
+CKPT_PATH = "../data/models/pres_transformer_encoder_epoch_20_attentionpoollnear_L2norm.pt"       # your 20-epoch checkpoint
+OUT_TSV = "embeddings_epoch20.tsv"                         
 
 @torch.no_grad()
 def main():

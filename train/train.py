@@ -24,7 +24,7 @@ TREE_PATH = "train_filtered/tree.nwk"
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 RAREFY_DEPTH = 5000                # target reads per sample (for model/UniFrac alignment)
-MODEL_READS = 1024                 # reads per sample fed to the model
+MODEL_READS = 3800                 # reads per sample fed to the model
 MAX_SAMPLES = None                 # cap number of samples per epoch
 
 SEQ_LEN = 150                      # 150bp sequences
@@ -244,10 +244,13 @@ class AttnPool1D(nn.Module):
     """
     def __init__(self, dim, hidden=128):
         super().__init__()
+        # self.proj = nn.Sequential(
+        #     nn.Linear(dim, hidden),
+        #     nn.Tanh(),
+        #     nn.Linear(hidden, 1) # # (B, N, 1) weights
+        # )
         self.proj = nn.Sequential(
-            nn.Linear(dim, hidden),
-            nn.Tanh(),
-            nn.Linear(hidden, 1) # # (B, N, 1) weights
+            nn.Linear(dim, 1)  # simpler: single linear layer to get (B, N, 1) weights
         )
 
     def forward(self, x):
