@@ -21,7 +21,7 @@ import torch.nn.functional as F
 BIOM_PATH = "train_filtered/train.biom"
 TREE_PATH = "train_filtered/tree.nwk"
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 RAREFY_DEPTH = 5000                # target reads per sample (for model/UniFrac alignment)
 MODEL_READS = 1024                 # reads per sample fed to the model
@@ -38,7 +38,7 @@ BETA_KL = 1e-4
 USE_UNIFRAC_LOSS = True   # set True if we want UniFrac loss in VAE
 UNIFRAC_WEIGHT = 50.0
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 ########################################
@@ -229,6 +229,23 @@ class PositionalEncoding(nn.Module):
         seq_len = x.size(1)
         return x + self.pe[:, :seq_len, :]
 
+class AttnPool1D(nn.Module):
+    """
+    Input:  x (B, N, D)
+    Output: pooled (B, D)
+
+    Learns a scalar weight per position N, then softmax → weighted sum.
+    """
+    def __init__(self, dim):
+        super().__init__()
+        self.proj = nn.Linear(dim, 1)
+
+    def forward(self, x):
+        # x: (B, N, D)
+        weights = self.proj(x).squeeze(-1)      # (B, N)
+        weights = torch.softmax(weights, dim=1) # (B, N)
+        pooled = (x * weights.unsqueeze(-1)).sum(dim=1)  # (B, D)
+        return pooled
 
 class UniFracEncoder(nn.Module):
     """
@@ -283,6 +300,8 @@ class UniFracEncoder(nn.Module):
         self.seq_encoder = nn.TransformerEncoder(
             seq_layer, num_layers=num_layers_seq
         )
+        self.nuc_pool = AttnPool1D(embed_dim)  # over nucleotide positions L
+        self.seq_pool = AttnPool1D(embed_dim)  # over reads R
 
     def forward(self, seq_ids):
         """
@@ -303,18 +322,25 @@ class UniFracEncoder(nn.Module):
         x = self.pos_enc_nuc(x)          # (B*R, L, D)
         x = self.nuc_encoder(x)          # (B*R, L, D)
 
-        # Mean over nucleotides -> per-sequence embedding
-        seq_emb = x.mean(dim=1)          # (B*R, D)
-        seq_emb = seq_emb.view(B, R, -1) # (B, R, D)
+        # # Mean over nucleotides -> per-sequence embedding
+        # seq_emb = x.mean(dim=1)          # (B*R, D)
+        
+        # Learned pooling over nucleotides -> per-sequence embedding
+        seq_emb = self.nuc_pool(x)        # (B*R, D)
+        seq_emb = seq_emb.view(B, R, -1)   # (B, R, D)
 
         # -------- Level 2: sequence-level transformer per sample --------
-        y = self.pos_enc_seq(seq_emb)    # (B, R, D)
-        y = self.seq_encoder(y)          # (B, R, D)
-        sample_emb = y.mean(dim=1)       # (B, D)
+        # y = self.pos_enc_seq(seq_emb)    # (B, R, D) reads are permutation invariant
+        y = self.seq_encoder(seq_emb)          # (B, R, D)
+        
+        # # Mean over Reads -> per-sequence embedding
+        # sample_emb = y.mean(dim=1)       # (B, D)
+        
+        # Learned pooling over reads -> per-sample embedding
+        sample_emb = self.seq_pool(y)       # (B, D)
 
         return sample_emb
-
-
+    
 class MLPUniFracEncoder(nn.Module):
     """
     Simpler encoder:
@@ -534,6 +560,9 @@ def distance_matching_loss_batch(
 ):
     device = embeddings.device
     B = embeddings.size(0)
+    
+    # # NEW: normalize embeddings to unit norm so loss focuses on geometry
+    # embeddings = F.normalize(embeddings, p=2, dim=1)  # (B, D)
 
     pred_dist = pairwise_euclidean_dist(embeddings)
 
@@ -555,9 +584,9 @@ def main():
         TREE_PATH,
     )
     id_to_dm_idx = {sid: i for i, sid in enumerate(dm_ids)}
-
-    #model = UniFracEncoder().to(DEVICE)
-    model = MLPUniFracEncoder().to(DEVICE)
+    print("Device is ", DEVICE)
+    model = UniFracEncoder().to(DEVICE)
+    #model = MLPUniFracEncoder().to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
     sample_tokens = None
@@ -610,6 +639,9 @@ def main():
         for batch in dataloader:
             seq = batch["seq"].to(DEVICE)   # (B, R, L)
             idx = batch["idx"].to(DEVICE)   # (B,)
+            
+            # print("seq.device:", seq.device)
+            # print("CUDA mem allocated (MB):", torch.cuda.memory_allocated() / 1e6)
 
             optimizer.zero_grad()
             emb = model(seq)                # (B, D)
@@ -630,7 +662,7 @@ def main():
         avg_loss = epoch_loss / max(1, num_batches)
         print(f"Epoch {epoch+1}/{NUM_EPOCHS} - Loss: {avg_loss:.6f}")
         # Save model checkpoint
-        save_path = f"/data/nicklas/scratch/pres_mlp_encoder_epoch_{epoch+1}.pt"
+        save_path = f"pres_transformer_encoder_epoch_{epoch+1}.pt"
         torch.save({
             "epoch": epoch + 1,
             "model_state_dict": model.state_dict(),
