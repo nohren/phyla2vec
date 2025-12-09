@@ -1,22 +1,11 @@
 # Phyla2Vec
 
-This project develops a phylogeny-aware encoding and diffusion framework for microbiome data, aimed at unifying 16S rRNA samples collected with different primer regions and collection protocols. Current primer-based methods (e.g., V4 vs. V3–V4) produce datasets that are incompatible across labs, limiting the effective size of training data for health classification tasks.
-Our approach learns UniFrac-aligned embeddings of microbiome samples, i.e a microbiome manifold, that is robust to primer and collection variance, then trains a conditional diffusion model to generate biologically consistent synthetic samples in this latent space. The result is a primer-agnostic generative pipeline capable of augmenting microbiome datasets, improving classifier generalization, and supporting downstream biological discovery.
+This project develops a phylogeny-aware encoding for microbiome data, aimed at unifying 16S rRNA samples collected with different collection protocols and batch effects. We use studies and their different batch effects to demonstrate slight out-of-distribution offsets that make cross-study comparisons noisy, limiting the effective size of training data for health classification tasks.
+Our approach learns UniFrac-aligned embeddings of microbiome samples i.e., a microbiome manifold across several studies that is robust to collection variance. We hope to achieve a batch collection agnostic pipeline capable of augmenting microbiome datasets, improving classifier generalization, removing the need to compute unifrac / phylogenetic distances, and support downstream biological discovery for the human microbiome. This project was chartered in collaboration with the UCSD Knight Lab.
 
-Core components:
+Results:
 
-📘 Encoding: Transformer-based sample embedding aligned to UniFrac phylogenetic distances
-
-🌱 Diffusion: Conditional flow-matching diffusion for synthetic microbiome sample generation
-
-🔬 Datasets: American Gut Project (Qiita 10317, Deblur V4), with ongoing expansion to additional primer datasets (V1–V3, V3–V4) via UCSD Knight Lab collaboration
-
-⚙️ Preprocessing: BIOM → (sample_id, sequence, nucleotide) triplet decomposition for fine-grained modeling
-
-📊 Evaluation: Distance correlation with UniFrac, downstream classifier accuracy on real + synthetic data
-
-Goal:
-Create uniform, biologically grounded representations of 16S microbiome data that enable cross-primer compatibility and high-fidelity synthetic data generation.
+![Results](output.png)
 
 ## Env setup
 
@@ -273,41 +262,13 @@ tmux attach -t work
 
 # when you need to leave but keep things running
 Ctrl-b d
-
-
 ```
-
-````bash
-
-## Training
-
-Starting from the first epoch and continuing every $f=5$ epochs:
-
-- conduct rarefaction on each sample via biom-format `biom.util.generate_subsamples`. This evens the depth per sample before unifrac calculation. It dilutes anomalies from differing sequencing depths.
-- Select n = 5000 random reads without replacement from each sample.
-
-```python
-  sample_1_reads = [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10]
-
-  # rarefy without replacement to 5 reads. No duplicate reads allowed.
-
-  # allowed
-  sample1_rarefy = {r3, r7, r1, r9, r5}
-
-  # not allowed
-  sample1_rarefy = {r3, r3, r1, r9, r5}
-
-````
-
-- compute unifrac using unifrac binaries, distance during training or precompute.
-  https://github.com/biocore/unifrac-binaries
 
 ## Testing encoder
 
-- Perccrustes analysis between corresponding unifrac and embedding sample distances in geometric space. Want high correlation.
-
 Experiments/Findings (lower the better over baseline 81% mean pooling):
+
 - Attention pooling linear -6% corr over mean pooling
 - Attention pooling non linear -5% corr over mean pooling
-- Rarefaction every 1 epochs and 3800 reads -2% corr over every 5 epochs and 1024 reads.  Shows that more frequent rarefaction and higher read counts help a tiny bit.  Maybe it sees more of the training distribution.
-- Rarefaction every 10 epochs and 3800 reads did worse +1% from every 5 epochs and 1024 reads, given linear attention pooling.  Less training distribution coverage, less rarefaction, maybe the amount of rarefaction > read count in terms of importance of representing the true distribution.
+- Rarefaction every 1 epochs and 3800 reads -2% corr over every 5 epochs and 1024 reads. Shows that more frequent rarefaction and higher read counts help a tiny bit. Maybe it sees more of the training distribution.
+- Rarefaction every 10 epochs and 3800 reads did worse +1% from every 5 epochs and 1024 reads, given linear attention pooling. Less training distribution coverage, less rarefaction, maybe the amount of rarefaction > read count in terms of importance of representing the true distribution.
