@@ -2,7 +2,7 @@
 
 This project develops a generalized phylogeny-aware encoding mechanism for microbiome data, aimed at unifying 16S rRNA samples collected with different collection protocols and batch effects. We use studies and their different batch effects to demonstrate slight out-of-distribution offsets that make cross-study comparisons noisy, limiting the effective size of training data for health classification tasks.
 
-We use a bidirectional transformer architecture to learn phylogeny aware UniFrac aligned embeddings of microbiome samples robust to collection variance. The idea is to create a batch collection agnostic pipeline capable of augmenting microbiome datasets, improving classifier generalization and removing the need to compute unifrac / phylogenetic distances for 16S rRNA sequences before downstream classification. This project is exploratory work following discussions with the UCSD Knight Lab.
+We use a bidirectional transformer architecture to learn phylogeny aware UniFrac aligned embeddings of microbiome samples robust to collection variance. The idea is to create a batch collection agnostic pipeline capable of augmenting microbiome datasets, improving classifier generalization and removing the need to compute unifrac / phylogenetic distances for 16S rRNA sequences before downstream classification.  We start with (batch, sample, reads, nucleotides) and through learned average pooling end up with (batch, sample, embedding). This project is exploratory work following discussions with the UCSD Knight Lab.
 
 Results:
 
